@@ -1,12 +1,12 @@
-import { useNavigate } from 'react-router'
 import { Badge, TabBar } from 'antd-mobile'
 import {
   AppOutline,
-  MessageOutline,
   MessageFill,
+  MessageOutline,
   UnorderedListOutline,
   UserOutline,
 } from 'antd-mobile-icons'
+import { useNavigate } from 'react-router'
 import CachedOutlet from './components/keep-alive/cached-outlet'
 
 const App = () => {
@@ -38,11 +38,13 @@ const App = () => {
 
   return (
     <div style={{ paddingBottom: 50 }}>
-      <h1 style={{ position: 'sticky', top: 0, zIndex: 99, background: '#fff' }}>
+      <h1
+        style={{ position: 'sticky', top: 0, zIndex: 99, background: '#fff' }}
+      >
         APP
       </h1>
       <hr />
-      <CachedOutlet />
+      <CachedOutlet max={2} />
       <div
         style={{
           position: 'fixed',

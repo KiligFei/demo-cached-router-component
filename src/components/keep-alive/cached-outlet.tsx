@@ -1,15 +1,28 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useOutlet } from 'react-router'
+import {
+  KeepAliveContext,
+  registerActivatedCallback,
+  registerDeactivatedCallback,
+} from './lifecycle'
+import type { CachedOutletProps } from './types'
 
-const normalizePath = (pathname: string) => {
-  return pathname === '/' ? '/home' : pathname
-}
+const defaultNormalize = (pathname: string): string => pathname
 
-const CachedOutlet = () => {
+const CachedOutlet = ({
+  max = 10,
+  include,
+  exclude,
+  normalizePath = defaultNormalize,
+}: CachedOutletProps) => {
   const outlet = useOutlet()
   const [cachedOutlets, setCachedOutlets] = useState(
-    new Map<string, React.ReactElement>(),
+    () => new Map<string, React.ReactElement>(),
   )
+
+  // Config refs — consumed by cache policy logic in Phase 2
+  const configRef = useRef({ max, include, exclude })
+  configRef.current! = { max, include, exclude }
 
   const location = useLocation()
   const key = normalizePath(location.pathname)
@@ -17,13 +30,16 @@ const CachedOutlet = () => {
   const scrollPositionsRef = useRef(new Map<string, number>())
   const currentPathRef = useRef(key)
 
+  // ── Cache write ─────────────────────────────────────────────────
   useEffect(() => {
     if (outlet) {
       outletRef.current = outlet
       setCachedOutlets((prev) => {
-        const newMap = new Map(prev)
-        newMap.set(key, outletRef.current!)
-        return newMap
+        // Cache hit: reuse existing instance, do not overwrite
+        if (prev.has(key)) return prev
+        const next = new Map(prev)
+        next.set(key, outletRef.current!)
+        return next
       })
     }
   }, [key, outlet])
@@ -32,6 +48,7 @@ const CachedOutlet = () => {
     currentPathRef.current = key
   }, [key])
 
+  // ── Scroll tracking (RAF-throttled) ─────────────────────────────
   useEffect(() => {
     let rafId: number | null = null
 
@@ -52,6 +69,7 @@ const CachedOutlet = () => {
     }
   }, [])
 
+  // ── Scroll restore ──────────────────────────────────────────────
   useLayoutEffect(() => {
     const nextScrollTop = scrollPositionsRef.current.get(key) ?? 0
     const frameId = window.requestAnimationFrame(() => {
@@ -61,19 +79,30 @@ const CachedOutlet = () => {
     return () => window.cancelAnimationFrame(frameId)
   }, [key])
 
+  // ── Lifecycle context value ─────────────────────────────────────
+  const contextValue = useMemo(
+    () => ({
+      routeKey: key,
+      registerActivated: (cb: () => void | (() => void)) =>
+        registerActivatedCallback(key, cb),
+      registerDeactivated: (cb: () => void | (() => void)) =>
+        registerDeactivatedCallback(key, cb),
+    }),
+    [key],
+  )
+
+  // ── Render ──────────────────────────────────────────────────────
   return (
-    <>
-      {[...cachedOutlets.entries()].map(([path, element]) => {
-        return (
-          <div
-            key={path}
-            style={{ display: path === key ? 'block' : 'none', height: '100%' }}
-          >
-            {element}
-          </div>
-        )
-      })}
-    </>
+    <KeepAliveContext.Provider value={contextValue}>
+      {[...cachedOutlets.entries()].map(([path, element]) => (
+        <div
+          key={path}
+          style={{ display: path === key ? 'block' : 'none', height: '100%' }}
+        >
+          {element}
+        </div>
+      ))}
+    </KeepAliveContext.Provider>
   )
 }
 
