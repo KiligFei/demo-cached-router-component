@@ -89,14 +89,17 @@ const CachedOutlet = ({
     currentPathRef.current = key
   }, [key])
 
-  // ── Scroll tracking (RAF-throttled) ─────────────────────────────
+  // ── Scroll tracking (RAF-throttled, cacheable routes only) ──────
   useEffect(() => {
     let rafId: number | null = null
 
     const handleScroll = () => {
       if (rafId !== null) return
       rafId = window.requestAnimationFrame(() => {
-        scrollPositionsRef.current.set(currentPathRef.current, window.scrollY)
+        const path = currentPathRef.current
+        if (cacheabilityRef.current.get(path) !== false) {
+          scrollPositionsRef.current.set(path, window.scrollY)
+        }
         rafId = null
       })
     }
@@ -110,8 +113,10 @@ const CachedOutlet = ({
     }
   }, [])
 
-  // ── Scroll restore ──────────────────────────────────────────────
+  // ── Scroll restore (cacheable routes only) ──────────────────────
   useLayoutEffect(() => {
+    if (cacheabilityRef.current.get(key) !== true) return
+
     const nextScrollTop = scrollPositionsRef.current.get(key) ?? 0
     const frameId = window.requestAnimationFrame(() => {
       window.scrollTo(0, nextScrollTop)
