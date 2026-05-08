@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useOutlet } from 'react-router'
+import type { Location } from 'react-router'
 import {
   enforceMaxSize,
   evictLRU,
@@ -8,91 +9,142 @@ import {
 } from './cache-policy'
 import {
   KeepAliveContext,
+  createLifecycleScopeId,
   dispatchActivated,
   dispatchDeactivated,
   registerActivatedCallback,
   registerDeactivatedCallback,
   removeLifecycleEntry,
+  removeLifecycleScope,
 } from './lifecycle'
 import type { CachedOutletProps } from './types'
 
 export type { ValidatedConfig } from './types'
 
-const defaultNormalize = (pathname: string): string => pathname
+const defaultGetCacheKey = (location: Location): string => location.pathname
+
+const RouteSlot = ({
+  scopeId,
+  routeKey,
+  isCacheable,
+  isActive,
+  children,
+}: {
+  scopeId: string
+  routeKey: string
+  isCacheable: boolean
+  isActive: boolean
+  children: React.ReactNode
+}) => {
+  const contextValue = useMemo(
+    () => ({
+      scopeId,
+      routeKey,
+      isCacheable,
+      registerActivated: (cb: () => void | (() => void)) =>
+        registerActivatedCallback(scopeId, routeKey, cb),
+      registerDeactivated: (cb: () => void | (() => void)) =>
+        registerDeactivatedCallback(scopeId, routeKey, cb),
+    }),
+    [isCacheable, routeKey, scopeId],
+  )
+
+  return (
+    <KeepAliveContext.Provider value={contextValue}>
+      <div
+        style={{ display: isActive ? 'block' : 'none', height: '100%' }}
+      >
+        {children}
+      </div>
+    </KeepAliveContext.Provider>
+  )
+}
 
 const CachedOutlet = ({
   max = 10,
   include,
   exclude,
-  normalizePath = defaultNormalize,
+  getCacheKey = defaultGetCacheKey,
 }: CachedOutletProps) => {
   const outlet = useOutlet()
   const [cachedOutlets, setCachedOutlets] = useState(
     () => new Map<string, React.ReactElement>(),
   )
-
-  // Config refs — updated before cache logic runs
-  const configRef = useRef({ max, include, exclude })
-  configRef.current! = { max, include, exclude }
+  const [lifecycleScopeId] = useState(createLifecycleScopeId)
 
   const location = useLocation()
-  const key = normalizePath(location.pathname)
-  const outletRef = useRef<React.ReactElement | null>(null)
+  const cacheKey = getCacheKey(location)
+  const validatedConfig = useMemo(
+    () => normalizeConfig({ max, include, exclude }),
+    [exclude, include, max],
+  )
+  const isCurrentRouteCacheable = shouldCache(cacheKey, validatedConfig)
+  const isCurrentRouteCacheHit = cachedOutlets.has(cacheKey)
   const scrollPositionsRef = useRef(new Map<string, number>())
-  const currentPathRef = useRef(key)
+  const currentPathRef = useRef(cacheKey)
+  const currentRouteCacheableRef = useRef(isCurrentRouteCacheable)
+  const routeCacheabilityRef = useRef(new Map<string, boolean>())
   // LRU recency tracking: key → last activated counter
   const lruRef = useRef(new Map<string, number>())
   const lruCounter = useRef(0)
   const isFirstMountRef = useRef(true)
-  // Ref-based cacheability tracker (avoids stale state in lifecycle effect)
-  const cacheabilityRef = useRef(new Map<string, boolean>())
 
   // ── Cache write + config validation + LRU eviction ─────────────
   useEffect(() => {
     if (!outlet) return
 
-    outletRef.current = outlet
-    const currentConfig = normalizeConfig(configRef.current)
-
     setCachedOutlets((prev) => {
       // Cache hit: reuse existing instance, update LRU recency
-      if (prev.has(key)) {
-        lruRef.current.set(key, ++lruCounter.current)
-        cacheabilityRef.current.set(key, true)
+      if (prev.has(cacheKey)) {
+        routeCacheabilityRef.current.set(cacheKey, true)
+        lruRef.current.set(cacheKey, ++lruCounter.current)
         return prev
       }
 
       // Non-cacheable route: render normally but don't cache
-      if (!shouldCache(key, currentConfig)) {
-        cacheabilityRef.current.set(key, false)
+      if (!isCurrentRouteCacheable) {
+        routeCacheabilityRef.current.set(cacheKey, false)
         return prev
       }
 
       // Cache miss: insert with eviction
-      cacheabilityRef.current.set(key, true)
+      routeCacheabilityRef.current.set(cacheKey, true)
       const next = new Map(prev)
       const lru = lruRef.current
 
-      next.set(key, outletRef.current!)
-      lru.set(key, ++lruCounter.current)
+      next.set(cacheKey, outlet)
+      lru.set(cacheKey, ++lruCounter.current)
 
       // Enforce max: evict LRU entries (never active route)
-      if (currentConfig.max > 0 && next.size > currentConfig.max) {
-        const evicted = enforceMaxSize(next, lru, currentConfig.max, key)
+      if (validatedConfig.max > 0 && next.size > validatedConfig.max) {
+        const evicted = enforceMaxSize(
+          next,
+          lru,
+          validatedConfig.max,
+          cacheKey,
+        )
         for (const evictedKey of evicted) {
-          dispatchDeactivated(evictedKey)
+          dispatchDeactivated(lifecycleScopeId, evictedKey)
           scrollPositionsRef.current.delete(evictedKey)
-          removeLifecycleEntry(evictedKey)
+          routeCacheabilityRef.current.delete(evictedKey)
+          removeLifecycleEntry(lifecycleScopeId, evictedKey)
         }
       }
 
       return next
     })
-  }, [key, outlet])
+  }, [
+    cacheKey,
+    isCurrentRouteCacheable,
+    lifecycleScopeId,
+    outlet,
+    validatedConfig.max,
+  ])
 
   useEffect(() => {
-    currentPathRef.current = key
-  }, [key])
+    currentPathRef.current = cacheKey
+    currentRouteCacheableRef.current = isCurrentRouteCacheable
+  }, [cacheKey, isCurrentRouteCacheable])
 
   // ── Scroll tracking (RAF-throttled, cacheable routes only) ──────
   useEffect(() => {
@@ -101,9 +153,8 @@ const CachedOutlet = ({
     const handleScroll = () => {
       if (rafId !== null) return
       rafId = window.requestAnimationFrame(() => {
-        const path = currentPathRef.current
-        if (cacheabilityRef.current.get(path) !== false) {
-          scrollPositionsRef.current.set(path, window.scrollY)
+        if (currentRouteCacheableRef.current) {
+          scrollPositionsRef.current.set(currentPathRef.current, window.scrollY)
         }
         rafId = null
       })
@@ -120,15 +171,17 @@ const CachedOutlet = ({
 
   // ── Scroll restore (cacheable routes only) ──────────────────────
   useLayoutEffect(() => {
-    if (cacheabilityRef.current.get(key) !== true) return
+    if (!isCurrentRouteCacheable) return
 
-    const nextScrollTop = scrollPositionsRef.current.get(key) ?? 0
+    const nextScrollTop = isCurrentRouteCacheHit
+      ? (scrollPositionsRef.current.get(cacheKey) ?? 0)
+      : 0
     const frameId = window.requestAnimationFrame(() => {
       window.scrollTo(0, nextScrollTop)
     })
 
     return () => window.cancelAnimationFrame(frameId)
-  }, [key])
+  }, [cacheKey, isCurrentRouteCacheHit, isCurrentRouteCacheable])
 
   // ── Lifecycle dispatch on route transitions ─────────────────────
   const prevRouteKeyRef = useRef<string | null>(null)
@@ -137,22 +190,26 @@ const CachedOutlet = ({
     if (isFirstMountRef.current) {
       isFirstMountRef.current = false
       // First entry into cacheable route → activate
-      if (cacheabilityRef.current.get(key) === true) {
-        dispatchActivated(key)
+      if (isCurrentRouteCacheable) {
+        dispatchActivated(lifecycleScopeId, cacheKey)
       }
     } else {
       const prevKey = prevRouteKeyRef.current
-      // Deactivate old route only if it was cacheable
-      if (prevKey && prevKey !== key && cacheabilityRef.current.get(prevKey) === true) {
-        dispatchDeactivated(prevKey)
+      // Deactivate old route only if it was cacheable.
+      if (
+        prevKey &&
+        prevKey !== cacheKey &&
+        routeCacheabilityRef.current.get(prevKey) === true
+      ) {
+        dispatchDeactivated(lifecycleScopeId, prevKey)
       }
       // Activate new route only if it is cacheable
-      if (cacheabilityRef.current.get(key) === true) {
-        dispatchActivated(key)
+      if (isCurrentRouteCacheable) {
+        dispatchActivated(lifecycleScopeId, cacheKey)
       }
     }
-    prevRouteKeyRef.current = key
-  }, [key])
+    prevRouteKeyRef.current = cacheKey
+  }, [cacheKey, isCurrentRouteCacheable, lifecycleScopeId])
 
   // ── Runtime config reconciliation ───────────────────────────────
   const prevConfigRef = useRef({ max, include, exclude })
@@ -165,7 +222,6 @@ const CachedOutlet = ({
     if (!configChanged) return
 
     prevConfigRef.current = { max, include, exclude }
-    const currentConfig = normalizeConfig(configRef.current)
 
     // 1. Prune non-cacheable entries (include/exclude changed)
     setCachedOutlets((prev) => {
@@ -173,11 +229,11 @@ const CachedOutlet = ({
       let changed = false
 
       for (const cachedKey of next.keys()) {
-        if (!shouldCache(cachedKey, currentConfig)) {
-          dispatchDeactivated(cachedKey)
+        if (!shouldCache(cachedKey, validatedConfig)) {
+          dispatchDeactivated(lifecycleScopeId, cachedKey)
           scrollPositionsRef.current.delete(cachedKey)
-          removeLifecycleEntry(cachedKey)
-          cacheabilityRef.current.delete(cachedKey)
+          routeCacheabilityRef.current.delete(cachedKey)
+          removeLifecycleEntry(lifecycleScopeId, cachedKey)
           lruRef.current.delete(cachedKey)
           next.delete(cachedKey)
           changed = true
@@ -185,14 +241,14 @@ const CachedOutlet = ({
       }
 
       // 2. Enforce new max (max decreased)
-      if (currentConfig.max > 0 && next.size > currentConfig.max) {
-        while (next.size > currentConfig.max) {
-          const evictedKey = evictLRU(lruRef.current, key)
+      if (validatedConfig.max > 0 && next.size > validatedConfig.max) {
+        while (next.size > validatedConfig.max) {
+          const evictedKey = evictLRU(lruRef.current, cacheKey)
           if (!evictedKey) break
-          dispatchDeactivated(evictedKey)
+          dispatchDeactivated(lifecycleScopeId, evictedKey)
           scrollPositionsRef.current.delete(evictedKey)
-          removeLifecycleEntry(evictedKey)
-          cacheabilityRef.current.delete(evictedKey)
+          routeCacheabilityRef.current.delete(evictedKey)
+          removeLifecycleEntry(lifecycleScopeId, evictedKey)
           lruRef.current.delete(evictedKey)
           next.delete(evictedKey)
           changed = true
@@ -201,43 +257,39 @@ const CachedOutlet = ({
 
       return changed ? next : prev
     })
-  }, [max, include, exclude])
+  }, [cacheKey, exclude, include, lifecycleScopeId, max, validatedConfig])
 
-  // ── Lifecycle context value ─────────────────────────────────────
-  const contextValue = useMemo(
-    () => ({
-      routeKey: key,
-      registerActivated: (cb: () => void | (() => void)) =>
-        registerActivatedCallback(key, cb),
-      registerDeactivated: (cb: () => void | (() => void)) =>
-        registerDeactivatedCallback(key, cb),
-    }),
-    [key],
-  )
+  useEffect(() => {
+    return () => {
+      removeLifecycleScope(lifecycleScopeId)
+    }
+  }, [lifecycleScopeId])
 
-  // Compute isCacheable fresh at render time (ref updates don't trigger useMemo)
-  const isCacheable = cacheabilityRef.current.get(key) !== false
-
-  console.log(
-    '%c====cached-outlet.tsx===216==cachedOutlets=',
-    'color: #007acc; font-weight: bold;',
-    cachedOutlets,
-  )
   return (
-    <KeepAliveContext.Provider value={{ ...contextValue, isCacheable }}>
+    <>
       {[...cachedOutlets.entries()].map(([path, element]) => (
-        <div
+        <RouteSlot
           key={path}
-          style={{ display: path === key ? 'block' : 'none', height: '100%' }}
+          scopeId={lifecycleScopeId}
+          routeKey={path}
+          isCacheable
+          isActive={path === cacheKey}
         >
           {element}
-        </div>
+        </RouteSlot>
       ))}
       {/* 非缓存路由：正常渲染但不加入缓存 */}
-      {!cachedOutlets.has(key) && (
-        <div style={{ height: '100%' }}>{outlet}</div>
+      {!cachedOutlets.has(cacheKey) && (
+        <RouteSlot
+          scopeId={lifecycleScopeId}
+          routeKey={cacheKey}
+          isCacheable={isCurrentRouteCacheable}
+          isActive
+        >
+          {outlet}
+        </RouteSlot>
       )}
-    </KeepAliveContext.Provider>
+    </>
   )
 }
 

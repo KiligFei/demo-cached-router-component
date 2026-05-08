@@ -1,4 +1,10 @@
-import { createContext, useCallback, useContext, useRef } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useRef,
+} from 'react'
 import type {
   LifecycleCallback,
   LifecycleRegistry,
@@ -8,14 +14,16 @@ import type {
 // ─── Context ───────────────────────────────────────────────────────
 
 export interface KeepAliveContextValue {
+  /** CachedOutlet instance scope id for lifecycle isolation. */
+  scopeId: string
   /** Normalized route key for the current route. */
   routeKey: string
   /** Whether the current route is cacheable under the active config. */
   isCacheable: boolean
-  /** Register an activated callback for the current route (called during render). */
-  registerActivated: (cb: LifecycleCallback) => void
-  /** Register a deactivated callback for the current route (called during render). */
-  registerDeactivated: (cb: LifecycleCallback) => void
+  /** Register an activated callback for the current route. */
+  registerActivated: (cb: LifecycleCallback) => () => void
+  /** Register a deactivated callback for the current route. */
+  registerDeactivated: (cb: LifecycleCallback) => () => void
 }
 
 export const KeepAliveContext = createContext<KeepAliveContextValue | null>(
@@ -25,9 +33,23 @@ export const KeepAliveContext = createContext<KeepAliveContextValue | null>(
 // ─── Module-level Registry ─────────────────────────────────────────
 
 const registry: LifecycleRegistry = new Map()
+let scopeIdCounter = 0
 
-function getOrCreateEntry(key: string): LifecycleRegistryEntry {
-  let entry = registry.get(key)
+function getOrCreateScope(scopeId: string) {
+  let scope = registry.get(scopeId)
+  if (!scope) {
+    scope = new Map()
+    registry.set(scopeId, scope)
+  }
+  return scope
+}
+
+function getOrCreateEntry(
+  scopeId: string,
+  key: string,
+): LifecycleRegistryEntry {
+  const scope = getOrCreateScope(scopeId)
+  let entry = scope.get(key)
   if (!entry) {
     entry = {
       activated: [],
@@ -35,43 +57,58 @@ function getOrCreateEntry(key: string): LifecycleRegistryEntry {
       deactivated: [],
       deactivatedCleanups: [],
     }
-    registry.set(key, entry)
+    scope.set(key, entry)
   }
   return entry
 }
 
-// ─── Registration (with dedup by reference identity) ───────────────
+export function createLifecycleScopeId(): string {
+  scopeIdCounter += 1
+  return `keep-alive-scope-${scopeIdCounter}`
+}
 
-export function registerActivatedCallback(key: string, cb: LifecycleCallback) {
-  const list = getOrCreateEntry(key).activated
-  if (list[list.length - 1] !== cb) {
-    list.push(cb)
+// ─── Registration ──────────────────────────────────────────────────
+
+export function registerActivatedCallback(
+  scopeId: string,
+  key: string,
+  cb: LifecycleCallback,
+) {
+  const entry = getOrCreateEntry(scopeId, key)
+  entry.activated.push(cb)
+
+  return () => {
+    const current = registry.get(scopeId)?.get(key)
+    if (!current) return
+    const index = current.activated.indexOf(cb)
+    if (index >= 0) {
+      current.activated.splice(index, 1)
+    }
   }
 }
 
 export function registerDeactivatedCallback(
+  scopeId: string,
   key: string,
   cb: LifecycleCallback,
 ) {
-  const list = getOrCreateEntry(key).deactivated
-  if (list[list.length - 1] !== cb) {
-    list.push(cb)
-  }
-}
+  const entry = getOrCreateEntry(scopeId, key)
+  entry.deactivated.push(cb)
 
-/** Clear registration lists before a new render cycle (preserves cleanups). */
-export function resetRegistrations(key: string) {
-  const entry = registry.get(key)
-  if (entry) {
-    entry.activated = []
-    entry.deactivated = []
+  return () => {
+    const current = registry.get(scopeId)?.get(key)
+    if (!current) return
+    const index = current.deactivated.indexOf(cb)
+    if (index >= 0) {
+      current.deactivated.splice(index, 1)
+    }
   }
 }
 
 // ─── Dispatch (called by CachedOutlet on route transitions) ────────
 
-export function dispatchActivated(key: string) {
-  const entry = registry.get(key)
+export function dispatchActivated(scopeId: string, key: string) {
+  const entry = registry.get(scopeId)?.get(key)
   if (!entry) return
 
   // 1. Run cleanups from previous deactivated dispatch
@@ -97,8 +134,8 @@ export function dispatchActivated(key: string) {
   entry.activatedCleanups = cleanups
 }
 
-export function dispatchDeactivated(key: string) {
-  const entry = registry.get(key)
+export function dispatchDeactivated(scopeId: string, key: string) {
+  const entry = registry.get(scopeId)?.get(key)
   if (!entry) return
 
   // 1. Run cleanups from previous activated dispatch
@@ -126,8 +163,18 @@ export function dispatchDeactivated(key: string) {
 
 // ─── Eviction ──────────────────────────────────────────────────────
 
-export function removeLifecycleEntry(key: string) {
-  registry.delete(key)
+export function removeLifecycleEntry(scopeId: string, key: string) {
+  const scope = registry.get(scopeId)
+  if (!scope) return
+
+  scope.delete(key)
+  if (scope.size === 0) {
+    registry.delete(scopeId)
+  }
+}
+
+export function removeLifecycleScope(scopeId: string) {
+  registry.delete(scopeId)
 }
 
 // ─── Hooks ─────────────────────────────────────────────────────────
@@ -141,22 +188,25 @@ export function useActivated(callback: LifecycleCallback) {
   if (!ctx) {
     throw new Error('useActivated must be used within a CachedOutlet')
   }
+  const { isCacheable, registerActivated, routeKey } = ctx
 
   const cbRef = useRef(callback)
   cbRef.current! = callback
 
   const stableCb = useCallback(() => cbRef.current(), [])
 
-  if (!ctx.isCacheable) {
-    if (import.meta.env?.DEV) {
-      console.warn(
-        `[keep-alive] useActivated on route "${ctx.routeKey}" has no effect — this route is not cached (check include/exclude config).`,
-      )
+  useLayoutEffect(() => {
+    if (!isCacheable) {
+      if (import.meta.env?.DEV) {
+        console.warn(
+          `[keep-alive] useActivated on route "${routeKey}" has no effect — this route is not cached (check include/exclude config).`,
+        )
+      }
+      return
     }
-    return
-  }
 
-  ctx.registerActivated(stableCb)
+    return registerActivated(stableCb)
+  }, [isCacheable, registerActivated, routeKey, stableCb])
 }
 
 /**
@@ -168,20 +218,23 @@ export function useDeactivated(callback: LifecycleCallback) {
   if (!ctx) {
     throw new Error('useDeactivated must be used within a CachedOutlet')
   }
+  const { isCacheable, registerDeactivated, routeKey } = ctx
 
   const cbRef = useRef(callback)
   cbRef.current! = callback
 
   const stableCb = useCallback(() => cbRef.current(), [])
 
-  if (!ctx.isCacheable) {
-    if (import.meta.env?.DEV) {
-      console.warn(
-        `[keep-alive] useDeactivated on route "${ctx.routeKey}" has no effect — this route is not cached (check include/exclude config).`,
-      )
+  useLayoutEffect(() => {
+    if (!isCacheable) {
+      if (import.meta.env?.DEV) {
+        console.warn(
+          `[keep-alive] useDeactivated on route "${routeKey}" has no effect — this route is not cached (check include/exclude config).`,
+        )
+      }
+      return
     }
-    return
-  }
 
-  ctx.registerDeactivated(stableCb)
+    return registerDeactivated(stableCb)
+  }, [isCacheable, registerDeactivated, routeKey, stableCb])
 }

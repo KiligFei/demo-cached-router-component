@@ -15,7 +15,11 @@ const About = () => {
   return (
     <div style={{ paddingTop: 200, height: 3000 }}>
       <h3>About</h3>
-      <Input placeholder="Basic usage" />
+      <Input
+        id="about-basic-usage"
+        name="about-basic-usage"
+        placeholder="Basic usage"
+      />
     </div>
   )
 }

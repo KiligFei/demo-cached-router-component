@@ -1,3 +1,4 @@
+import type { Location } from 'react-router'
 import { Badge, TabBar } from 'antd-mobile'
 import {
   AppOutline,
@@ -8,6 +9,9 @@ import {
 } from 'antd-mobile-icons'
 import { useNavigate } from 'react-router'
 import CachedOutlet from './components/keep-alive/cached-outlet'
+
+const getTabCacheKey = (location: Location) =>
+  location.pathname === '/' ? '/home' : location.pathname
 
 const App = () => {
   const tabs = [
@@ -45,9 +49,10 @@ const App = () => {
       </h1>
       <hr />
       <CachedOutlet
-        max={3}
-        include={['/home', '/about']}
-        exclude={['/list', '/movie']}
+        max={2}
+        include={['/home', '/movie', '/about']}
+        exclude={['/list']}
+        getCacheKey={getTabCacheKey}
       />
       <div
         style={{

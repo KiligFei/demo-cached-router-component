@@ -20,7 +20,7 @@ import CachedOutlet from './components/keep-alive/cached-outlet'
   max={10}
   include={['/home', '/movie', '/about', '/list']}
   exclude={['/about']}
-  normalizePath={(pathname) => pathname === '/' ? '/home' : pathname}
+  getCacheKey={(location) => location.pathname === '/' ? '/home' : location.pathname}
 />
 ```
 
@@ -29,7 +29,7 @@ import CachedOutlet from './components/keep-alive/cached-outlet'
 | `max` | `number` | `10` | 最大缓存数。`max <= 0` 禁用缓存 |
 | `include` | `string[]` | `undefined` | 可缓存路由列表（精确匹配规范化路径）。省略时全部可缓存 |
 | `exclude` | `string[]` | `undefined` | 排除的路由。优先级高于 `include` |
-| `normalizePath` | `(pathname: string) => string` | 恒等函数 | 路径规范化函数，作用于缓存 key、include/exclude 匹配、滚动 key |
+| `getCacheKey` | `(location: Location) => string` | `location => location.pathname` | 缓存 key 计算函数，作用于缓存 key、include/exclude 匹配、滚动 key、生命周期分发 |
 
 ### 配置校验
 
@@ -91,7 +91,7 @@ const MyPage = () => {
 
 ### Cache key
 
-使用 `normalizePath(location.pathname)` 作为缓存 key。默认恒等映射，可通过 `normalizePath` prop 自定义（如 `/` → `/home`）。
+使用 `getCacheKey(location)` 作为缓存 key。默认行为是 `location.pathname`，可通过 `getCacheKey` 将 `/` 归一为 `/home`，或将 query/hash 纳入缓存 key 计算。
 
 ### include / exclude 规则
 
@@ -141,5 +141,6 @@ pnpm dev
 
 ```bash
 pnpm build
+pnpm test
 pnpm preview
 ```

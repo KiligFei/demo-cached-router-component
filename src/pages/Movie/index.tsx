@@ -15,7 +15,11 @@ const Movie = () => {
   return (
     <div style={{ paddingTop: 200, height: 3000 }}>
       <h3>Movie</h3>
-      <Input placeholder="Basic usage" />
+      <Input
+        id="movie-basic-usage"
+        name="movie-basic-usage"
+        placeholder="Basic usage"
+      />
     </div>
   )
 }

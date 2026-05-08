@@ -7,7 +7,6 @@ import {
   WindowScroller,
 } from 'react-virtualized'
 import { mockRequest } from './components/mock-request'
-import { useActivated, useDeactivated } from '../../components/keep-alive/lifecycle'
 
 type Item = {
   avatar: string
@@ -25,16 +24,6 @@ const item = {
 const ListPage = () => {
   const [data, setData] = useState<Item[]>(Array(20).fill(item))
   const [hasMore, setHasMore] = useState(true)
-
-  useActivated(() => {
-    console.log('%c[List] activated', 'color: #13c2c2')
-    return () => console.log('%c[List] activated cleanup', 'color: #13c2c2')
-  })
-
-  useDeactivated(() => {
-    console.log('%c[List] deactivated', 'color: #f5222d')
-    return () => console.log('%c[List] deactivated cleanup', 'color: #f5222d')
-  })
 
   async function loadMore() {
     const append = await mockRequest()
@@ -76,6 +65,9 @@ const ListPage = () => {
 
   return (
     <div>
+      <div style={{ padding: '12px 16px', fontSize: 14, color: '#666' }}>
+        List page is intentionally excluded from keep-alive.
+      </div>
       <WindowScroller>
         {({ height, scrollTop, isScrolling }) => (
           <List>

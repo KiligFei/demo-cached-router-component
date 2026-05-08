@@ -1,22 +1,23 @@
 import type React from 'react'
+import type { Location } from 'react-router'
 
 // ─── Public Props ──────────────────────────────────────────────────
 
 export interface CachedOutletProps {
   /** Maximum number of cached routes. Default 10. max <= 0 disables caching. */
   max?: number
-  /** Routes to cache (exact pathname match against normalized path). Omit to cache all. */
+  /** Routes to cache (exact match against computed cache key). Omit to cache all. */
   include?: string[]
   /** Routes to exclude from caching. Higher priority than include. */
   exclude?: string[]
-  /** Custom path normalization. Default: identity. Applied to cache key, include/exclude match, scroll key, lifecycle dispatch. */
-  normalizePath?: (pathname: string) => string
+  /** Cache key resolver. Default: location.pathname. Applied to cache key, include/exclude match, scroll key, lifecycle dispatch. */
+  getCacheKey?: (location: Location) => string
 }
 
 // ─── Internal Cache Entry ──────────────────────────────────────────
 
 export interface CacheEntry {
-  /** Normalized pathname used as cache key. */
+  /** Resolved cache key for the route instance. */
   key: string
   /** Cached route element instance (never replaced on cache hit). */
   element: React.ReactElement
@@ -41,8 +42,8 @@ export interface LifecycleRegistryEntry {
   deactivatedCleanups: ((() => void) | undefined)[]
 }
 
-/** Registry keyed by normalized route key. */
-export type LifecycleRegistry = Map<string, LifecycleRegistryEntry>
+/** Registry keyed by scope id, then route key. */
+export type LifecycleRegistry = Map<string, Map<string, LifecycleRegistryEntry>>
 
 // ─── Validated Config (output of normalizeConfig) ──────────────────
 
