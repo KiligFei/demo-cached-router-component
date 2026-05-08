@@ -1,6 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useOutlet } from 'react-router'
-import { enforceMaxSize, evictLRU, normalizeConfig, shouldCache } from './cache-policy'
+import {
+  enforceMaxSize,
+  evictLRU,
+  normalizeConfig,
+  shouldCache,
+} from './cache-policy'
 import {
   KeepAliveContext,
   dispatchActivated,
@@ -137,12 +142,14 @@ const CachedOutlet = ({
       }
     } else {
       const prevKey = prevRouteKeyRef.current
-      // Deactivate old route (if different)
-      if (prevKey && prevKey !== key) {
+      // Deactivate old route only if it was cacheable
+      if (prevKey && prevKey !== key && cacheabilityRef.current.get(prevKey) === true) {
         dispatchDeactivated(prevKey)
       }
-      // Activate new route
-      dispatchActivated(key)
+      // Activate new route only if it is cacheable
+      if (cacheabilityRef.current.get(key) === true) {
+        dispatchActivated(key)
+      }
     }
     prevRouteKeyRef.current = key
   }, [key])
@@ -153,9 +160,7 @@ const CachedOutlet = ({
   useEffect(() => {
     const prev = prevConfigRef.current
     const configChanged =
-      prev.max !== max ||
-      prev.include !== include ||
-      prev.exclude !== exclude
+      prev.max !== max || prev.include !== include || prev.exclude !== exclude
 
     if (!configChanged) return
 
@@ -210,8 +215,16 @@ const CachedOutlet = ({
     [key],
   )
 
+  // Compute isCacheable fresh at render time (ref updates don't trigger useMemo)
+  const isCacheable = cacheabilityRef.current.get(key) !== false
+
+  console.log(
+    '%c====cached-outlet.tsx===216==cachedOutlets=',
+    'color: #007acc; font-weight: bold;',
+    cachedOutlets,
+  )
   return (
-    <KeepAliveContext.Provider value={contextValue}>
+    <KeepAliveContext.Provider value={{ ...contextValue, isCacheable }}>
       {[...cachedOutlets.entries()].map(([path, element]) => (
         <div
           key={path}
@@ -220,6 +233,10 @@ const CachedOutlet = ({
           {element}
         </div>
       ))}
+      {/* 非缓存路由：正常渲染但不加入缓存 */}
+      {!cachedOutlets.has(key) && (
+        <div style={{ height: '100%' }}>{outlet}</div>
+      )}
     </KeepAliveContext.Provider>
   )
 }

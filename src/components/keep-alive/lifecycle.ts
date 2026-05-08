@@ -10,6 +10,8 @@ import type {
 export interface KeepAliveContextValue {
   /** Normalized route key for the current route. */
   routeKey: string
+  /** Whether the current route is cacheable under the active config. */
+  isCacheable: boolean
   /** Register an activated callback for the current route (called during render). */
   registerActivated: (cb: LifecycleCallback) => void
   /** Register a deactivated callback for the current route (called during render). */
@@ -143,9 +145,17 @@ export function useActivated(callback: LifecycleCallback) {
   const cbRef = useRef(callback)
   cbRef.current! = callback
 
-  // Register during render so callbacks are available before dispatch.
-  // Dedup: only push if not already the last registered entry (same closure identity).
   const stableCb = useCallback(() => cbRef.current(), [])
+
+  if (!ctx.isCacheable) {
+    if (import.meta.env?.DEV) {
+      console.warn(
+        `[keep-alive] useActivated on route "${ctx.routeKey}" has no effect — this route is not cached (check include/exclude config).`,
+      )
+    }
+    return
+  }
+
   ctx.registerActivated(stableCb)
 }
 
@@ -163,5 +173,15 @@ export function useDeactivated(callback: LifecycleCallback) {
   cbRef.current! = callback
 
   const stableCb = useCallback(() => cbRef.current(), [])
+
+  if (!ctx.isCacheable) {
+    if (import.meta.env?.DEV) {
+      console.warn(
+        `[keep-alive] useDeactivated on route "${ctx.routeKey}" has no effect — this route is not cached (check include/exclude config).`,
+      )
+    }
+    return
+  }
+
   ctx.registerDeactivated(stableCb)
 }

@@ -1,19 +1,17 @@
 import { Input } from 'antd-mobile'
-import {
-  useActivated,
-  useDeactivated,
-} from '../../components/keep-alive/lifecycle'
+import { useActivated, useDeactivated } from '../../components/keep-alive/lifecycle'
 
 const Home = () => {
   useActivated(() => {
-    console.log('Home activated')
-    return () => console.log('Home activated cleanup')
+    console.log('%c[Home] activated', 'color: #1890ff')
+    return () => console.log('%c[Home] activated cleanup', 'color: #1890ff')
   })
 
   useDeactivated(() => {
-    console.log('Home deactivated')
-    return () => console.log('Home deactivated cleanup')
+    console.log('%c[Home] deactivated', 'color: #fa8c16')
+    return () => console.log('%c[Home] deactivated cleanup', 'color: #fa8c16')
   })
+
   return (
     <div style={{ paddingTop: 200, height: 3000 }}>
       <h3>Home</h3>

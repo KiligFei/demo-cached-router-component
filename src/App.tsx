@@ -44,7 +44,11 @@ const App = () => {
         APP
       </h1>
       <hr />
-      <CachedOutlet max={3} />
+      <CachedOutlet
+        max={3}
+        include={['/home', '/about']}
+        exclude={['/list', '/movie']}
+      />
       <div
         style={{
           position: 'fixed',
