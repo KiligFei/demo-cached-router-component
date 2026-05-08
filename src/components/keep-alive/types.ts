@@ -43,3 +43,11 @@ export interface LifecycleRegistryEntry {
 
 /** Registry keyed by normalized route key. */
 export type LifecycleRegistry = Map<string, LifecycleRegistryEntry>
+
+// ─── Validated Config (output of normalizeConfig) ──────────────────
+
+export interface ValidatedConfig {
+  max: number
+  include: string[] | undefined
+  exclude: string[] | undefined
+}

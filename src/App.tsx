@@ -44,7 +44,7 @@ const App = () => {
         APP
       </h1>
       <hr />
-      <CachedOutlet max={2} />
+      <CachedOutlet max={3} />
       <div
         style={{
           position: 'fixed',
