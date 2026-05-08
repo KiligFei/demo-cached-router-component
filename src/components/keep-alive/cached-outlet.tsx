@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useOutlet } from 'react-router'
-import { enforceMaxSize, normalizeConfig, shouldCache } from './cache-policy'
+import { enforceMaxSize, evictLRU, normalizeConfig, shouldCache } from './cache-policy'
 import {
   KeepAliveContext,
   dispatchActivated,
@@ -146,6 +146,57 @@ const CachedOutlet = ({
     }
     prevRouteKeyRef.current = key
   }, [key])
+
+  // ── Runtime config reconciliation ───────────────────────────────
+  const prevConfigRef = useRef({ max, include, exclude })
+
+  useEffect(() => {
+    const prev = prevConfigRef.current
+    const configChanged =
+      prev.max !== max ||
+      prev.include !== include ||
+      prev.exclude !== exclude
+
+    if (!configChanged) return
+
+    prevConfigRef.current = { max, include, exclude }
+    const currentConfig = normalizeConfig(configRef.current)
+
+    // 1. Prune non-cacheable entries (include/exclude changed)
+    setCachedOutlets((prev) => {
+      const next = new Map(prev)
+      let changed = false
+
+      for (const cachedKey of next.keys()) {
+        if (!shouldCache(cachedKey, currentConfig)) {
+          dispatchDeactivated(cachedKey)
+          scrollPositionsRef.current.delete(cachedKey)
+          removeLifecycleEntry(cachedKey)
+          cacheabilityRef.current.delete(cachedKey)
+          lruRef.current.delete(cachedKey)
+          next.delete(cachedKey)
+          changed = true
+        }
+      }
+
+      // 2. Enforce new max (max decreased)
+      if (currentConfig.max > 0 && next.size > currentConfig.max) {
+        while (next.size > currentConfig.max) {
+          const evictedKey = evictLRU(lruRef.current, key)
+          if (!evictedKey) break
+          dispatchDeactivated(evictedKey)
+          scrollPositionsRef.current.delete(evictedKey)
+          removeLifecycleEntry(evictedKey)
+          cacheabilityRef.current.delete(evictedKey)
+          lruRef.current.delete(evictedKey)
+          next.delete(evictedKey)
+          changed = true
+        }
+      }
+
+      return changed ? next : prev
+    })
+  }, [max, include, exclude])
 
   // ── Lifecycle context value ─────────────────────────────────────
   const contextValue = useMemo(
