@@ -1,17 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useOutlet } from 'react-router'
-import {
-  enforceMaxSize,
-  normalizeConfig,
-  shouldCache,
-} from './cache-policy'
+import { enforceMaxSize, normalizeConfig, shouldCache } from './cache-policy'
 import {
   KeepAliveContext,
   dispatchActivated,
   dispatchDeactivated,
-  removeLifecycleEntry,
   registerActivatedCallback,
   registerDeactivatedCallback,
+  removeLifecycleEntry,
 } from './lifecycle'
 import type { CachedOutletProps } from './types'
 
@@ -125,6 +121,8 @@ const CachedOutlet = ({
   }, [key])
 
   // ── Lifecycle dispatch on route transitions ─────────────────────
+  const prevRouteKeyRef = useRef<string | null>(null)
+
   useEffect(() => {
     if (isFirstMountRef.current) {
       isFirstMountRef.current = false
@@ -133,9 +131,15 @@ const CachedOutlet = ({
         dispatchActivated(key)
       }
     } else {
-      // Route changed → deactivate old, activate new
+      const prevKey = prevRouteKeyRef.current
+      // Deactivate old route (if different)
+      if (prevKey && prevKey !== key) {
+        dispatchDeactivated(prevKey)
+      }
+      // Activate new route
       dispatchActivated(key)
     }
+    prevRouteKeyRef.current = key
   }, [key])
 
   // ── Lifecycle context value ─────────────────────────────────────
@@ -150,7 +154,6 @@ const CachedOutlet = ({
     [key],
   )
 
-  // ── Render ──────────────────────────────────────────────────────
   return (
     <KeepAliveContext.Provider value={contextValue}>
       {[...cachedOutlets.entries()].map(([path, element]) => (
