@@ -1,4 +1,5 @@
 import type React from 'react'
+import type { DependencyList } from 'react'
 import type { Location } from 'react-router'
 
 // ─── Public Props ──────────────────────────────────────────────────
@@ -10,6 +11,8 @@ export interface CachedOutletProps {
   include?: string[]
   /** Routes to exclude from caching. Higher priority than include. */
   exclude?: string[]
+  /** Cache keys to invalidate immediately. Current active key will be refreshed in place when included. */
+  invalidateKeys?: string[]
   /** Cache key resolver. Default: location.pathname. Applied to cache key, include/exclude match, scroll key, lifecycle dispatch. */
   getCacheKey?: (location: Location) => string
 }
@@ -30,6 +33,8 @@ export interface CacheEntry {
 export type LifecycleCleanup = void | (() => void)
 
 export type LifecycleCallback = () => LifecycleCleanup
+
+export type KeepAliveEffectDependencies = DependencyList
 
 export interface LifecycleRegistryEntry {
   /** Callbacks registered via useActivated, in registration order. */

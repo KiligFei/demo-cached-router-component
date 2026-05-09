@@ -15,6 +15,8 @@ import {
   createLifecycleScopeId,
   dispatchActivated,
   registerActivatedCallback,
+  useKeepAliveActive,
+  useKeepAliveEffect,
   useActivated,
   useDeactivated,
 } from './lifecycle'
@@ -267,6 +269,41 @@ describe('CachedOutlet', () => {
     })
   })
 
+  it('does not dispatch deactivated twice when an already hidden route is later evicted', async () => {
+    const eventLog: string[] = []
+    const { router } = renderHarness({
+      config: {
+        include: ['/home', '/movie', '/about'],
+        max: 2,
+      },
+      eventLog,
+    })
+
+    await screen.findByText('home')
+
+    await act(async () => {
+      await router.navigate('/movie')
+    })
+    await screen.findByText('movie')
+
+    await act(async () => {
+      await router.navigate('/about')
+    })
+
+    await waitFor(() => {
+      expect(eventLog).toEqual([
+        'home:activated',
+        'home:activated-cleanup',
+        'home:deactivated',
+        'movie:activated',
+        'movie:activated-cleanup',
+        'movie:deactivated',
+        'about:activated',
+        'home:deactivated-cleanup',
+      ])
+    })
+  })
+
   it('reconciles existing cache immediately when max shrinks at runtime', async () => {
     const control: ConfigControl = {
       initialConfig: {
@@ -417,6 +454,42 @@ describe('CachedOutlet', () => {
     })
   })
 
+  it('does not restore scroll position for non-cacheable routes', async () => {
+    const { router } = renderHarness({
+      config: {
+        include: ['/home'],
+        max: 1,
+      },
+    })
+
+    window.scrollTo(0, 480)
+    fireEvent.scroll(window)
+
+    await act(async () => {
+      await router.navigate('/about')
+    })
+    await screen.findByText('about')
+
+    window.scrollTo(0, 140)
+    fireEvent.scroll(window)
+
+    await act(async () => {
+      await router.navigate('/home')
+    })
+
+    await waitFor(() => {
+      expect(window.scrollY).toBe(480)
+    })
+
+    await act(async () => {
+      await router.navigate('/about')
+    })
+
+    await waitFor(() => {
+      expect(window.scrollY).toBe(480)
+    })
+  })
+
   it('prunes cached routes immediately when exclude changes at runtime', async () => {
     const control: ConfigControl = {
       initialConfig: {
@@ -471,5 +544,127 @@ describe('CachedOutlet', () => {
     expect(consoleErrorSpy).toHaveBeenCalled()
 
     consoleErrorSpy.mockRestore()
+  })
+
+  it('refreshes the current route in place when invalidateKeys includes the active key', async () => {
+    const control: ConfigControl = {
+      initialConfig: {
+        include: ['/home'],
+        invalidateKeys: [],
+        max: 1,
+      },
+    }
+    const mountCounts: Record<string, number> = {}
+    renderHarness({
+      config: control.initialConfig,
+      control,
+      mountCounts,
+    })
+
+    const homeInput = getVisibleInput('home-input')
+    fireEvent.change(homeInput, { target: { value: 'invalidate-me' } })
+    const initialHomeMounts = mountCounts.home ?? 0
+
+    await act(async () => {
+      control.setConfig?.((prev) => ({ ...prev, invalidateKeys: ['/home'] }))
+    })
+
+    await waitFor(() => {
+      const refreshedHomeInput = getVisibleInput('home-input')
+      expect(refreshedHomeInput.value).toBe('')
+      expect(mountCounts.home).toBeGreaterThan(initialHomeMounts)
+    })
+  })
+
+  it('exposes active state for hidden-page side effect control', async () => {
+    const activeLog: string[] = []
+
+    const ActiveAwarePage = ({ label }: { label: string }) => {
+      const isActive = useKeepAliveActive()
+
+      useEffect(() => {
+        activeLog.push(`${label}:${isActive ? 'active' : 'inactive'}`)
+      }, [isActive, label])
+
+      return <h1>{label}</h1>
+    }
+
+    const router = createMemoryRouter(
+      [
+        {
+          path: '/',
+          element: <CachedOutlet include={['/home', '/movie']} />,
+          children: [
+            { path: 'home', element: <ActiveAwarePage label="home" /> },
+            { path: 'movie', element: <ActiveAwarePage label="movie" /> },
+          ],
+        },
+      ],
+      { initialEntries: ['/home'] },
+    )
+
+    render(<RouterProvider router={router} />)
+    await screen.findByText('home')
+
+    await act(async () => {
+      await router.navigate('/movie')
+    })
+
+    await waitFor(() => {
+      expect(activeLog).toEqual([
+        'home:active',
+        'home:inactive',
+        'movie:active',
+      ])
+    })
+  })
+
+  it('automatically pauses and resumes keep-alive effects with route visibility', async () => {
+    const effectLog: string[] = []
+
+    const AutoPausedPage = ({ label }: { label: string }) => {
+      useKeepAliveEffect(() => {
+        effectLog.push(`${label}:start`)
+        return () => effectLog.push(`${label}:stop`)
+      }, [label])
+
+      return <h1>{label}</h1>
+    }
+
+    const router = createMemoryRouter(
+      [
+        {
+          path: '/',
+          element: <CachedOutlet include={['/home', '/movie']} />,
+          children: [
+            { path: 'home', element: <AutoPausedPage label="home" /> },
+            { path: 'movie', element: <AutoPausedPage label="movie" /> },
+          ],
+        },
+      ],
+      { initialEntries: ['/home'] },
+    )
+
+    render(<RouterProvider router={router} />)
+    await screen.findByText('home')
+
+    await act(async () => {
+      await router.navigate('/movie')
+    })
+    await screen.findByText('movie')
+
+    await act(async () => {
+      await router.navigate('/home')
+    })
+
+    await waitFor(() => {
+      expect(effectLog).toEqual([
+        'home:start',
+        'home:stop',
+        'movie:start',
+        'movie:stop',
+        'home:start',
+      ])
+    })
   })
 })

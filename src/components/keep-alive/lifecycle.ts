@@ -1,11 +1,14 @@
 import {
   createContext,
-  useCallback,
+  useEffect,
+  useEffectEvent,
   useContext,
   useLayoutEffect,
   useRef,
+  useState,
 } from 'react'
 import type {
+  KeepAliveEffectDependencies,
   LifecycleCallback,
   LifecycleRegistry,
   LifecycleRegistryEntry,
@@ -20,6 +23,8 @@ export interface KeepAliveContextValue {
   routeKey: string
   /** Whether the current route is cacheable under the active config. */
   isCacheable: boolean
+  /** Whether the current route is the active visible route. */
+  isActive: boolean
   /** Register an activated callback for the current route. */
   registerActivated: (cb: LifecycleCallback) => () => void
   /** Register a deactivated callback for the current route. */
@@ -161,6 +166,33 @@ export function dispatchDeactivated(scopeId: string, key: string) {
   entry.deactivatedCleanups = cleanups
 }
 
+/**
+ * Dispose a lifecycle entry without re-dispatching route transition callbacks.
+ * Used when an already inactive cache entry is evicted or invalidated.
+ */
+export function disposeLifecycleEntry(scopeId: string, key: string) {
+  const entry = registry.get(scopeId)?.get(key)
+  if (!entry) return
+
+  for (const cleanup of entry.activatedCleanups) {
+    try {
+      cleanup?.()
+    } catch (e) {
+      console.error('[keep-alive] activated cleanup error:', e)
+    }
+  }
+  entry.activatedCleanups = []
+
+  for (const cleanup of entry.deactivatedCleanups) {
+    try {
+      cleanup?.()
+    } catch (e) {
+      console.error('[keep-alive] deactivated cleanup error:', e)
+    }
+  }
+  entry.deactivatedCleanups = []
+}
+
 // ─── Eviction ──────────────────────────────────────────────────────
 
 export function removeLifecycleEntry(scopeId: string, key: string) {
@@ -180,7 +212,8 @@ export function removeLifecycleScope(scopeId: string) {
 // ─── Hooks ─────────────────────────────────────────────────────────
 
 /**
- * Register a callback that runs when the route becomes active (cache-hit re-entry).
+ * Register a callback that runs when the route becomes active.
+ * This includes the first entry into a cacheable route and later cache-hit re-entry.
  * Callback may return a cleanup function that runs on deactivation.
  */
 export function useActivated(callback: LifecycleCallback) {
@@ -189,11 +222,7 @@ export function useActivated(callback: LifecycleCallback) {
     throw new Error('useActivated must be used within a CachedOutlet')
   }
   const { isCacheable, registerActivated, routeKey } = ctx
-
-  const cbRef = useRef(callback)
-  cbRef.current! = callback
-
-  const stableCb = useCallback(() => cbRef.current(), [])
+  const onActivated = useEffectEvent(callback)
 
   useLayoutEffect(() => {
     if (!isCacheable) {
@@ -205,8 +234,8 @@ export function useActivated(callback: LifecycleCallback) {
       return
     }
 
-    return registerActivated(stableCb)
-  }, [isCacheable, registerActivated, routeKey, stableCb])
+    return registerActivated(onActivated)
+  }, [isCacheable, registerActivated, routeKey])
 }
 
 /**
@@ -219,11 +248,7 @@ export function useDeactivated(callback: LifecycleCallback) {
     throw new Error('useDeactivated must be used within a CachedOutlet')
   }
   const { isCacheable, registerDeactivated, routeKey } = ctx
-
-  const cbRef = useRef(callback)
-  cbRef.current! = callback
-
-  const stableCb = useCallback(() => cbRef.current(), [])
+  const onDeactivated = useEffectEvent(callback)
 
   useLayoutEffect(() => {
     if (!isCacheable) {
@@ -235,6 +260,76 @@ export function useDeactivated(callback: LifecycleCallback) {
       return
     }
 
-    return registerDeactivated(stableCb)
-  }, [isCacheable, registerDeactivated, routeKey, stableCb])
+    return registerDeactivated(onDeactivated)
+  }, [isCacheable, registerDeactivated, routeKey])
+}
+
+export function useKeepAliveStatus() {
+  const ctx = useContext(KeepAliveContext)
+  if (!ctx) {
+    throw new Error('useKeepAliveStatus must be used within a CachedOutlet')
+  }
+
+  return {
+    isActive: ctx.isActive,
+    isCacheable: ctx.isCacheable,
+    routeKey: ctx.routeKey,
+    scopeId: ctx.scopeId,
+  }
+}
+
+export function useKeepAliveActive() {
+  return useKeepAliveStatus().isActive
+}
+
+function areDependenciesEqual(
+  prevDeps: KeepAliveEffectDependencies,
+  nextDeps: KeepAliveEffectDependencies,
+) {
+  if (prevDeps.length !== nextDeps.length) return false
+
+  for (let index = 0; index < prevDeps.length; index += 1) {
+    if (!Object.is(prevDeps[index], nextDeps[index])) {
+      return false
+    }
+  }
+
+  return true
+}
+
+function useDependencyVersion(deps: KeepAliveEffectDependencies) {
+  const previousDepsRef = useRef(deps)
+  const [version, setVersion] = useState(0)
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- custom shallow compare for a dynamic dependency list
+  useLayoutEffect(() => {
+    if (areDependenciesEqual(previousDepsRef.current, deps)) {
+      return
+    }
+
+    previousDepsRef.current = deps
+    setVersion((currentVersion) => currentVersion + 1)
+  })
+
+  return version
+}
+
+/**
+ * useEffect variant for keep-alive pages.
+ * The effect only runs while the route is active/visible.
+ * When the page becomes hidden, the previous cleanup runs automatically.
+ */
+export function useKeepAliveEffect(
+  effect: LifecycleCallback,
+  deps: KeepAliveEffectDependencies = [],
+) {
+  const { isActive } = useKeepAliveStatus()
+  const effectVersion = useDependencyVersion(deps)
+  const onVisibleEffect = useEffectEvent(effect)
+
+  useEffect(() => {
+    if (!isActive) return
+
+    return onVisibleEffect()
+  }, [effectVersion, isActive])
 }
