@@ -114,23 +114,3 @@ export function enforceMaxSize(
 
   return evicted
 }
-
-/**
- * Remove entries that no longer pass shouldCache under the new config.
- * Returns the set of pruned keys.
- */
-export function pruneNonCacheable(
-  cache: Map<string, unknown>,
-  config: ValidatedConfig,
-): Set<string> {
-  const pruned = new Set<string>()
-
-  for (const key of cache.keys()) {
-    if (!shouldCache(key, config)) {
-      cache.delete(key)
-      pruned.add(key)
-    }
-  }
-
-  return pruned
-}

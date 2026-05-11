@@ -40,6 +40,37 @@ export const KeepAliveContext = createContext<KeepAliveContextValue | null>(
 const registry: LifecycleRegistry = new Map()
 let scopeIdCounter = 0
 
+function runLifecycleCleanups(
+  cleanups: ((() => void) | undefined)[],
+  errorLabel: string,
+) {
+  for (const cleanup of cleanups) {
+    try {
+      cleanup?.()
+    } catch (e) {
+      console.error(`[keep-alive] ${errorLabel}:`, e)
+    }
+  }
+}
+
+function collectLifecycleCleanups(
+  callbacks: LifecycleCallback[],
+  errorLabel: string,
+) {
+  const cleanups: ((() => void) | undefined)[] = []
+
+  for (const callback of callbacks) {
+    try {
+      cleanups.push(callback() ?? undefined)
+    } catch (e) {
+      console.error(`[keep-alive] ${errorLabel}:`, e)
+      cleanups.push(undefined)
+    }
+  }
+
+  return cleanups
+}
+
 function getOrCreateScope(scopeId: string) {
   let scope = registry.get(scopeId)
   if (!scope) {
@@ -117,26 +148,17 @@ export function dispatchActivated(scopeId: string, key: string) {
   if (!entry) return
 
   // 1. Run cleanups from previous deactivated dispatch
-  for (const cleanup of entry.deactivatedCleanups) {
-    try {
-      cleanup?.()
-    } catch (e) {
-      console.error('[keep-alive] deactivated cleanup error:', e)
-    }
-  }
+  runLifecycleCleanups(
+    entry.deactivatedCleanups,
+    'deactivated cleanup error',
+  )
   entry.deactivatedCleanups = []
 
   // 2. Run activated callbacks in registration order
-  const cleanups: ((() => void) | undefined)[] = []
-  for (const cb of entry.activated) {
-    try {
-      cleanups.push(cb() ?? undefined)
-    } catch (e) {
-      console.error('[keep-alive] activated callback error:', e)
-      cleanups.push(undefined)
-    }
-  }
-  entry.activatedCleanups = cleanups
+  entry.activatedCleanups = collectLifecycleCleanups(
+    entry.activated,
+    'activated callback error',
+  )
 }
 
 export function dispatchDeactivated(scopeId: string, key: string) {
@@ -144,26 +166,14 @@ export function dispatchDeactivated(scopeId: string, key: string) {
   if (!entry) return
 
   // 1. Run cleanups from previous activated dispatch
-  for (const cleanup of entry.activatedCleanups) {
-    try {
-      cleanup?.()
-    } catch (e) {
-      console.error('[keep-alive] activated cleanup error:', e)
-    }
-  }
+  runLifecycleCleanups(entry.activatedCleanups, 'activated cleanup error')
   entry.activatedCleanups = []
 
   // 2. Run deactivated callbacks in registration order
-  const cleanups: ((() => void) | undefined)[] = []
-  for (const cb of entry.deactivated) {
-    try {
-      cleanups.push(cb() ?? undefined)
-    } catch (e) {
-      console.error('[keep-alive] deactivated callback error:', e)
-      cleanups.push(undefined)
-    }
-  }
-  entry.deactivatedCleanups = cleanups
+  entry.deactivatedCleanups = collectLifecycleCleanups(
+    entry.deactivated,
+    'deactivated callback error',
+  )
 }
 
 /**
@@ -174,22 +184,13 @@ export function disposeLifecycleEntry(scopeId: string, key: string) {
   const entry = registry.get(scopeId)?.get(key)
   if (!entry) return
 
-  for (const cleanup of entry.activatedCleanups) {
-    try {
-      cleanup?.()
-    } catch (e) {
-      console.error('[keep-alive] activated cleanup error:', e)
-    }
-  }
+  runLifecycleCleanups(entry.activatedCleanups, 'activated cleanup error')
   entry.activatedCleanups = []
 
-  for (const cleanup of entry.deactivatedCleanups) {
-    try {
-      cleanup?.()
-    } catch (e) {
-      console.error('[keep-alive] deactivated cleanup error:', e)
-    }
-  }
+  runLifecycleCleanups(
+    entry.deactivatedCleanups,
+    'deactivated cleanup error',
+  )
   entry.deactivatedCleanups = []
 }
 

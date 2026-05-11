@@ -1,4 +1,3 @@
-import type React from 'react'
 import type { DependencyList } from 'react'
 import type { Location } from 'react-router'
 
@@ -15,17 +14,6 @@ export interface CachedOutletProps {
   invalidateKeys?: string[]
   /** Cache key resolver. Default: location.pathname. Applied to cache key, include/exclude match, scroll key, lifecycle dispatch. */
   getCacheKey?: (location: Location) => string
-}
-
-// ─── Internal Cache Entry ──────────────────────────────────────────
-
-export interface CacheEntry {
-  /** Resolved cache key for the route instance. */
-  key: string
-  /** Cached route element instance (never replaced on cache hit). */
-  element: React.ReactElement
-  /** Monotonically increasing counter updated on each activation, used for LRU ordering. */
-  lastActivatedAt: number
 }
 
 // ─── Lifecycle ─────────────────────────────────────────────────────
